@@ -1,0 +1,104 @@
+name: Production Keep-Alive & Health Check
+
+on:
+  schedule:
+    # Run every 14 minutes to prevent Render free-tier web services from sleeping (15-min idle timeout)
+    - cron: '*/14 * * * *'
+  workflow_dispatch: # Allows manual trigger from the GitHub Actions UI
+
+concurrency:
+  group: keep-alive-guard
+  cancel-in-progress: true
+
+jobs:
+  health-check:
+    name: Ping Services & Database
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'server/package.json'
+
+      - name: Install Server Dependencies (for DB Ping)
+        if: env.MONGO_URI != ''
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: |
+          cd server
+          npm ci --omit=dev || npm install --omit=dev
+
+      # ── 1. Backend Service Keep-Alive ─────────────────────────────────────────
+      - name: Ping Backend Health Endpoint
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL || 'https://weathergpt-t7zu.onrender.com' }}
+        run: |
+          CLEAN_URL="${BACKEND_URL%/}"
+          echo "📡 [BACKEND] Pinging $CLEAN_URL/health with cold-start retry support..."
+          RESPONSE=""
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt: GET $CLEAN_URL/health"
+            RESPONSE=$(curl -s -S -f --connect-timeout 15 --max-time 60 "$CLEAN_URL/health" || true)
+            if [ -n "$RESPONSE" ]; then
+              break
+            fi
+            echo "⏳ Service may be waking from cold sleep. Waiting 8s before retry..."
+            sleep 8
+          done
+
+          if [ -n "$RESPONSE" ]; then
+            echo "✅ [BACKEND] Service is ONLINE and healthy:"
+            echo "$RESPONSE"
+          else
+            echo "❌ [BACKEND] Failed to reach $CLEAN_URL/health after 3 attempts."
+            exit 1
+          fi
+
+      # ── 2. ML Service Keep-Alive ─────────────────────────────────────────────
+      - name: Ping ML Microservice Health Endpoint
+        env:
+          ML_SERVICE_URL: ${{ secrets.ML_SERVICE_URL || 'https://weathergpt-1-ike5.onrender.com' }}
+        run: |
+          CLEAN_URL="${ML_SERVICE_URL%/}"
+          echo "📡 [ML] Pinging $CLEAN_URL/health with cold-start retry support..."
+          RESPONSE=""
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt: GET $CLEAN_URL/health"
+            RESPONSE=$(curl -s -S -f --connect-timeout 15 --max-time 60 "$CLEAN_URL/health" || true)
+            if [ -n "$RESPONSE" ]; then
+              break
+            fi
+            echo "⏳ ML service may be waking from cold sleep. Waiting 8s before retry..."
+            sleep 8
+          done
+
+          if [ -n "$RESPONSE" ]; then
+            echo "✅ [ML] Service is ONLINE and healthy:"
+            echo "$RESPONSE"
+          else
+            echo "❌ [ML] Failed to reach $CLEAN_URL/health after 3 attempts."
+            exit 1
+          fi
+
+      # ── 3. MongoDB Atlas Keep-Alive ───────────────────────────────────────────
+      - name: Ping MongoDB Atlas
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: |
+          if [ -z "$MONGO_URI" ]; then
+            echo "ℹ️ [MONGODB] MONGO_URI secret is not set directly in GitHub Actions."
+            echo "ℹ️ Database connectivity is verified through backend health telemetry."
+          else
+            echo "📡 [MONGODB] Running direct ping via server/ping-db.js..."
+            node server/ping-db.js
+          fi
+

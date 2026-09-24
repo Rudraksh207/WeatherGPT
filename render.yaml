@@ -1,0 +1,38 @@
+services:
+  # ── 1. Backend API Gateway (Node.js) ──────────────────────────────────────────
+  - type: web
+    name: weathergpt-backend
+    env: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5001
+      - key: CLIENT_URL
+        sync: false
+      - key: ML_SERVICE_URL
+        value: https://weathergpt2-0.onrender.com
+      - key: WEATHER_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: GEMINI_API_KEY_3
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: MONGO_URI
+        sync: false
